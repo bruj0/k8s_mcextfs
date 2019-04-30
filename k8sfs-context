@@ -1,0 +1,201 @@
+#! /usr/bin/env python
+"""
+Kubernetes FS Virtual filesystem for Midnight Commander
+* Copyright (c) 2019, Rodrigo Diaz Leven
+* Published under 3-clause BSD-style license (see LICENSE file)
+"""
+from __future__ import print_function
+import argparse
+from datetime import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+from kubernetes import client, config
+from kubernetes.client import configuration
+from kubernetes.client.rest import ApiException
+import logging
+from pprint import pprint
+
+# set up logging to file - see previous section for more details
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(name)-12s %(levelname)-8s %(message)s",
+    datefmt="%m-%d %H:%M",
+    filename="/tmp/k8sfs.log",
+    filemode="a",
+)
+logging.getLogger("kubernetes.client.rest").setLevel(logging.ERROR)
+# define a Handler which writes INFO messages or higher to the sys.stderr
+
+__version__ = 0.11
+
+XDG_CONFIG_HOME = os.getenv("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+
+
+class K8s:
+    helper = None
+    arch = None
+
+    def __init__(self, arch):
+        self.arch = arch.split("k8s-context")[1]
+        self.k8s = K8sHelper(self.arch)
+        logging.debug(f"k8fs-context:k8s:init called with {self.arch}")
+
+    def list(self):
+        logging.debug(f"k8fs-context list called")
+        # print(f"list called {arch}")
+        pods = self.k8s.get_all_pods()
+        # pprint(pods)
+        ret = ""
+        for pod in pods.items:
+            m = pod.metadata
+            ret = f"{ret}-r--r--r-- 1 root root 0 {m.creation_timestamp.strftime('%m-%d-%Y %H:%M:%S')} namespaces/{m.namespace}/{m.name}\n"
+            # -rwxrwxrwx 1 root root 0 {now.strftime('%m-%d-%Y %H:%M:%S')} ./[k8scontext] {context}\n"
+        print(ret.rstrip())
+        exit(0)
+
+    def copyin(self, arch, dst, src):
+        logging.debug(f"copyin called {arch} {dst} {src}")
+
+    def copyout(self, arch, dst, src):
+        logging.debug(f"copyout called {arch} {dst} {src}")
+
+
+CALL_MAP = {
+    "list": lambda a: K8s(a.arch).list(),
+    "copyin": lambda a: K8s(a.arch).copyin(a.src, a.dst),
+    "copyout": lambda a: K8s(a.arch).copyout(a.src, a.dst),
+    "mkdir": lambda a: K8s(a.arch).mkdir(a.dst),
+    "rmdir": lambda a: K8s(a.arch).rmdir(a.dst),
+    "rm": lambda a: K8s(a.arch).rm(a.dst),
+    "run": lambda a: K8s(a.arch).run(a.dst),
+}
+
+# """display the file/entire node"""
+# template = (
+#     "{perms} {links:>4} {uid:<8} {gid:<8} {size:>8} " "{date_time} {fullname}\n"
+# )
+def test(args):
+    h = K8sHelper("dev-tooling")
+    pprint(h.get_all_pods())
+
+
+def main2():
+    logging.debug("k8sfs-context called main2")
+    """parse commandline"""
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(help="supported commands")
+    parser_list = subparsers.add_parser("list")
+    parser_copyin = subparsers.add_parser("copyin")
+    parser_copyout = subparsers.add_parser("copyout")
+    parser_rm = subparsers.add_parser("rm")
+    parser_mkdir = subparsers.add_parser("mkdir")
+    parser_rmdir = subparsers.add_parser("rmdir")
+    parser_run = subparsers.add_parser("run")
+    parser_test = subparsers.add_parser("test")
+
+    # parser_test.add_argument("arch")
+    parser_test.set_defaults(func=test)
+
+    parser_list.add_argument("arch")
+    parser_list.set_defaults(func=CALL_MAP["list"])
+
+    parser_copyin.add_argument("arch")
+    parser_copyin.add_argument("dst")
+    parser_copyin.add_argument("src")
+    parser_copyin.set_defaults(func=CALL_MAP["copyin"])
+
+    parser_copyout.add_argument("arch")
+    parser_copyout.add_argument("src")
+    parser_copyout.add_argument("dst")
+    parser_copyout.set_defaults(func=CALL_MAP["copyout"])
+
+    parser_rm.add_argument("arch")
+    parser_rm.add_argument("dst")
+    parser_rm.set_defaults(func=CALL_MAP["rm"])
+
+    parser_mkdir.add_argument("arch")
+    parser_mkdir.add_argument("dst")
+    parser_mkdir.set_defaults(func=CALL_MAP["mkdir"])
+
+    parser_rmdir.add_argument("arch")
+    parser_rmdir.add_argument("dst")
+    parser_rmdir.set_defaults(func=CALL_MAP["rmdir"])
+
+    parser_run.add_argument("arch")
+    parser_run.add_argument("dst")
+    parser_run.set_defaults(func=CALL_MAP["run"])
+
+    parser.add_argument(
+        "--version", action="version", version="%(prog)s " + str(__version__)
+    )
+
+    args = parser.parse_args()
+
+    return args.func(args)
+
+
+# AAAAAAA NNN OOOOOOOO GGGGGGGG SSSSSSSS DATETIME [PATH/]FILENAME [-> [PATH/]FILENAME[/]]]
+class K8sHelper:
+    context = None
+
+    def __init__(self, context):
+        self.context = context
+
+    def get_contexts(self):
+        contexts, active_context = config.list_kube_config_contexts()
+        if not contexts:
+            print("Cannot find any context in kube-config file.")
+            exit(1)
+        # print(contexts)
+        contexts = [context["name"] for context in contexts]
+        # print(contexts)
+        # active_index = contexts.index(active_context["name"])
+        return contexts
+
+    def list_all(self, context):
+        # Configs can be set in Configuration class directly or using helper
+        # utility
+        config.load_kube_config(context=context)
+
+        print("Active host is %s" % configuration.host)
+
+        v1 = client.CoreV1Api()
+        print("Listing pods with their IPs:")
+        ret = v1.list_pod_for_all_namespaces(watch=False)
+        for item in ret.items:
+            print(
+                "%s\t%s\t%s"
+                % (item.status.pod_ip, item.metadata.namespace, item.metadata.name)
+            )
+
+    def get_api_resources(self):
+        config.load_kube_config(context=self.context)
+        api = client.CoreV1Api()
+        try:
+            api_response = api.get_api_resources()
+            pprint(api_response)
+        except ApiException as e:
+            logging.exception(
+                "Exception when calling AppsV1Api->get_api_resources: %s\n" % e
+            )
+
+    def get_all_pods(self):
+        config.load_kube_config(context=self.context)
+        api = client.CoreV1Api()
+        try:
+            api_response = api.list_pod_for_all_namespaces()
+            return api_response
+            # pprint(api_response)
+        except ApiException as e:
+            logging.exception(
+                "Exception when calling AppsV1Api->list_pod_for_all_namespaces: %s\n"
+                % e
+            )
+            exit(1)
+
+
+if __name__ == "__main__":
+    sys.exit(main2())

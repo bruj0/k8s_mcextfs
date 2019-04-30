@@ -1,0 +1,145 @@
+#! /usr/bin/env python
+"""
+Kubernetes FS Virtual filesystem for Midnight Commander
+* Copyright (c) 2019, Rodrigo Diaz Leven
+* Published under 3-clause BSD-style license (see LICENSE file)
+"""
+from __future__ import print_function
+import argparse
+from datetime import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+from kubernetes import client, config
+from kubernetes.client import configuration
+from kubernetes.client.rest import ApiException
+import logging
+from pprint import pprint
+
+# set up logging to file - see previous section for more details
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(name)-12s %(levelname)-8s %(message)s",
+    datefmt="%m-%d %H:%M",
+    filename="/tmp/k8sfs.log",
+    filemode="a",
+)
+# define a Handler which writes INFO messages or higher to the sys.stderr
+
+__version__ = 0.11
+
+XDG_CONFIG_HOME = os.getenv("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+
+
+class K8s:
+    helper = None
+
+    def __init__(self, *args, **kwargs):
+        logging.debug(f"k8fs called with {args} {kwargs}")
+        self.k8s = K8sHelper()
+
+    def list(self):
+        now = datetime.now()
+        contexts = self.k8s.get_contexts()
+        ret = ""
+        for context in contexts:
+            # AAAAAAA NNN OOOOOOOO GGGGGGGG SSSSSSSS DATETIME [PATH/]FILENAME [-> [PATH/]FILENAME[/]]]
+            ret = f"{ret}-r--r--r-- 1 root root 0 {now.strftime('%m-%d-%Y %H:%M:%S')} ./[k8s-context] {context}\n"
+            # ret = f"{ret}-r--r--r-- 1 root root 0 01-01-1979 00:00 ./{context}\n"
+        print(ret.rstrip())
+        exit(0)
+
+    def copyout(self, dst):
+        logging.debug(f"k8fs: copyout called {dst} ")
+
+
+CALL_MAP = {
+    "list": lambda a: K8s().list(),
+    "copyin": lambda a: K8s(a.arch).copyin(a.src, a.dst),
+    "copyout": lambda a: K8s(a.arch).copyout(a.dst),
+    "mkdir": lambda a: K8s(a.arch).mkdir(a.dst),
+    "rmdir": lambda a: K8s(a.arch).rmdir(a.dst),
+    "rm": lambda a: K8s(a.arch).rm(a.dst),
+    "run": lambda a: K8s(a.arch).run(a.dst),
+}
+
+# """display the file/entire node"""
+# template = (
+#     "{perms} {links:>4} {uid:<8} {gid:<8} {size:>8} " "{date_time} {fullname}\n"
+# )
+def test(args):
+    h = K8sHelper("dev-tooling")
+    pprint(h.get_all_pods())
+
+
+def main2():
+    """parse commandline"""
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(help="supported commands")
+    parser_list = subparsers.add_parser("list")
+    parser_copyin = subparsers.add_parser("copyin")
+    parser_copyout = subparsers.add_parser("copyout")
+    parser_rm = subparsers.add_parser("rm")
+    parser_mkdir = subparsers.add_parser("mkdir")
+    parser_rmdir = subparsers.add_parser("rmdir")
+    parser_run = subparsers.add_parser("run")
+    parser_test = subparsers.add_parser("test")
+
+    # parser_test.add_argument("arch")
+    parser_test.set_defaults(func=test)
+
+    parser_list.set_defaults(func=CALL_MAP["list"])
+
+    parser_copyin.add_argument("arch")
+    parser_copyin.add_argument("dst")
+    parser_copyin.add_argument("src")
+    parser_copyin.set_defaults(func=CALL_MAP["copyin"])
+
+    parser_copyout.add_argument("arch")
+    parser_copyout.add_argument("src")
+    parser_copyout.add_argument("dst")
+    parser_copyout.set_defaults(func=CALL_MAP["copyout"])
+
+    parser_rm.add_argument("arch")
+    parser_rm.add_argument("dst")
+    parser_rm.set_defaults(func=CALL_MAP["rm"])
+
+    parser_mkdir.add_argument("arch")
+    parser_mkdir.add_argument("dst")
+    parser_mkdir.set_defaults(func=CALL_MAP["mkdir"])
+
+    parser_rmdir.add_argument("arch")
+    parser_rmdir.add_argument("dst")
+    parser_rmdir.set_defaults(func=CALL_MAP["rmdir"])
+
+    parser_run.add_argument("arch")
+    parser_run.add_argument("dst")
+    parser_run.set_defaults(func=CALL_MAP["run"])
+
+    parser.add_argument(
+        "--version", action="version", version="%(prog)s " + str(__version__)
+    )
+
+    args = parser.parse_args()
+
+    return args.func(args)
+
+
+# AAAAAAA NNN OOOOOOOO GGGGGGGG SSSSSSSS DATETIME [PATH/]FILENAME [-> [PATH/]FILENAME[/]]]
+class K8sHelper:
+    def get_contexts(self):
+        contexts, active_context = config.list_kube_config_contexts()
+        if not contexts:
+            print("Cannot find any context in kube-config file.")
+            exit(1)
+        # print(contexts)
+        contexts = [context["name"] for context in contexts]
+        # print(contexts)
+        # active_index = contexts.index(active_context["name"])
+        return contexts
+
+
+if __name__ == "__main__":
+    sys.exit(main2())
