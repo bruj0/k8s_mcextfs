@@ -26,6 +26,7 @@ logging.basicConfig(
     filename="/tmp/k8sfs.log",
     filemode="a",
 )
+logging.getLogger("kubernetes.client.rest").setLevel(logging.ERROR)
 # define a Handler which writes INFO messages or higher to the sys.stderr
 
 __version__ = 0.11
@@ -47,7 +48,6 @@ class K8s:
         for context in contexts:
             # AAAAAAA NNN OOOOOOOO GGGGGGGG SSSSSSSS DATETIME [PATH/]FILENAME [-> [PATH/]FILENAME[/]]]
             ret = f"{ret}-r--r--r-- 1 root root 0 {now.strftime('%m-%d-%Y %H:%M:%S')} ./[k8s-context] {context}\n"
-            # ret = f"{ret}-r--r--r-- 1 root root 0 01-01-1979 00:00 ./{context}\n"
         print(ret.rstrip())
         exit(0)
 

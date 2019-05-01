@@ -17,6 +17,9 @@ from kubernetes.client import configuration
 from kubernetes.client.rest import ApiException
 import logging
 from pprint import pprint
+import subprocess
+import json
+from dateutil import parser
 
 # set up logging to file - see previous section for more details
 logging.basicConfig(
@@ -37,30 +40,82 @@ XDG_CONFIG_HOME = os.getenv("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
 class K8s:
     helper = None
     arch = None
+    full_arch = None
 
     def __init__(self, arch):
+        logging.debug(f"k8fs-context:k8s:init called with {arch}")
+        self.full_arch = arch
         self.arch = arch.split("k8s-context")[1]
         self.k8s = K8sHelper(self.arch)
-        logging.debug(f"k8fs-context:k8s:init called with {self.arch}")
 
     def list(self):
         logging.debug(f"k8fs-context list called")
-        # print(f"list called {arch}")
-        pods = self.k8s.get_all_pods()
-        # pprint(pods)
+        out = subprocess.check_output(
+            [
+                "kubectl",
+                f"--context={self.arch}",
+                "get",
+                "deploy,pod,rs,svc,ing,sts,job,cm,pdb,secret",
+                "--all-namespaces",
+                "-o=custom-columns=NAMESPACE:.metadata.namespace,KIND:.kind,NAME:.metadata.name",
+                "-o=json",
+            ]
+        )
+        json_out = json.loads(out)
+        # pprint(json_out)
         ret = ""
-        for pod in pods.items:
-            m = pod.metadata
-            ret = f"{ret}-r--r--r-- 1 root root 0 {m.creation_timestamp.strftime('%m-%d-%Y %H:%M:%S')} namespaces/{m.namespace}/{m.name}\n"
-            # -rwxrwxrwx 1 root root 0 {now.strftime('%m-%d-%Y %H:%M:%S')} ./[k8scontext] {context}\n"
+        for item in json_out["items"]:
+            m = item["metadata"]
+            # pprint(m)
+            dt = parser.parse(m["creationTimestamp"])
+            # pprint(item)
+            ret = f"{ret}-rwxr--r-- 1 root root 0 {dt.strftime('%m-%d-%Y %H:%M:%S')} {m['namespace']}/{item['kind']}/{m['name']}.yaml\n"
         print(ret.rstrip())
         exit(0)
 
-    def copyin(self, arch, dst, src):
-        logging.debug(f"copyin called {arch} {dst} {src}")
+    def copyin(self, dst, src):
+        logging.debug(f"copyin called  {dst} {src}")
 
-    def copyout(self, arch, dst, src):
-        logging.debug(f"copyout called {arch} {dst} {src}")
+    def copyout(self, dst, src):
+        logging.debug(f"copyout called  {dst} {src}")
+        dst = dst.split("/")
+        namespace = dst[0]
+        kind = dst[1]
+        name = dst[2].split(".yaml")[0]
+        out = subprocess.check_output(
+            [
+                "kubectl",
+                f"--context={self.arch}",
+                f"--namespace={namespace}",
+                "get",
+                kind,
+                name,
+                "-o=yaml",
+            ]
+        )
+        with open(src, "wb") as fd:
+            fd.write(out)
+        exit(0)
+
+    def run(self, dst):
+        logging.debug(f"run called  {dst} ")
+        dst = dst.split("/")
+        namespace = dst[0]
+        kind = dst[1]
+        name = dst[2].split(".yaml")[0]
+        out = subprocess.check_output(
+            [
+                "kubectl",
+                f"--context={self.arch}",
+                f"--namespace={namespace}",
+                "describe",
+                kind,
+                name,
+            ]
+        )
+        # with open(self.full_arch, "wb") as fd:
+        #    fd.write(out)
+        print(out.decode("utf-8"))
 
 
 CALL_MAP = {
@@ -78,8 +133,8 @@ CALL_MAP = {
 #     "{perms} {links:>4} {uid:<8} {gid:<8} {size:>8} " "{date_time} {fullname}\n"
 # )
 def test(args):
-    h = K8sHelper("dev-tooling")
-    pprint(h.get_all_pods())
+    h = K8s("...k8s-contextdev-tooling")
+    pprint(h.list())
 
 
 def main2():
@@ -144,49 +199,25 @@ class K8sHelper:
     def __init__(self, context):
         self.context = context
 
-    def get_contexts(self):
-        contexts, active_context = config.list_kube_config_contexts()
-        if not contexts:
-            print("Cannot find any context in kube-config file.")
-            exit(1)
-        # print(contexts)
-        contexts = [context["name"] for context in contexts]
-        # print(contexts)
-        # active_index = contexts.index(active_context["name"])
-        return contexts
-
-    def list_all(self, context):
-        # Configs can be set in Configuration class directly or using helper
-        # utility
-        config.load_kube_config(context=context)
-
-        print("Active host is %s" % configuration.host)
-
-        v1 = client.CoreV1Api()
-        print("Listing pods with their IPs:")
-        ret = v1.list_pod_for_all_namespaces(watch=False)
-        for item in ret.items:
-            print(
-                "%s\t%s\t%s"
-                % (item.status.pod_ip, item.metadata.namespace, item.metadata.name)
-            )
-
-    def get_api_resources(self):
-        config.load_kube_config(context=self.context)
-        api = client.CoreV1Api()
-        try:
-            api_response = api.get_api_resources()
-            pprint(api_response)
-        except ApiException as e:
-            logging.exception(
-                "Exception when calling AppsV1Api->get_api_resources: %s\n" % e
-            )
-
     def get_all_pods(self):
         config.load_kube_config(context=self.context)
         api = client.CoreV1Api()
         try:
             api_response = api.list_pod_for_all_namespaces()
+            return api_response
+            # pprint(api_response)
+        except ApiException as e:
+            logging.exception(
+                "Exception when calling AppsV1Api->list_pod_for_all_namespaces: %s\n"
+                % e
+            )
+            exit(1)
+
+    def get_all_deployments(self):
+        config.load_kube_config(context=self.context)
+        api = client.AppsV1Api()
+        try:
+            api_response = api.list_deployment_for_all_namespaces()
             return api_response
             # pprint(api_response)
         except ApiException as e:
