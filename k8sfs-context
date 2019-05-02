@@ -116,6 +116,17 @@ class K8s:
         # with open(self.full_arch, "wb") as fd:
         #    fd.write(out)
         print(out.decode("utf-8"))
+        out = subprocess.check_output(
+            [
+                "kubectl",
+                f"--context={self.arch}",
+                f"--namespace={namespace}",
+                "get",
+                kind,
+                name,
+            ]
+        )
+        print(out.decode("utf-8"))
 
 
 CALL_MAP = {
