@@ -118,9 +118,7 @@ def main2():
     parser_run.add_argument("dst")
     parser_run.set_defaults(func=CALL_MAP["run"])
 
-    parser.add_argument(
-        "--version", action="version", version="%(prog)s " + str(__version__)
-    )
+    parser.add_argument("--version", action="version", version="%(prog)s " + str(__version__))
 
     args = parser.parse_args()
 

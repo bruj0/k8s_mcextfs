@@ -12,9 +12,6 @@ import os
 import re
 import subprocess
 import sys
-from kubernetes import client, config
-from kubernetes.client import configuration
-from kubernetes.client.rest import ApiException
 import logging
 from pprint import pprint
 import subprocess
@@ -69,9 +66,25 @@ class K8s:
             # pprint(m)
             dt = parser.parse(m["creationTimestamp"])
             # pprint(item)
-            ret = f"{ret}-rwxr--r-- 1 root root 0 {dt.strftime('%m-%d-%Y %H:%M:%S')} {m['namespace']}/{item['kind']}/{m['name']}.yaml\n"
+            if item["kind"] == "Pod":
+                # pprint(item)
+                m["name"] = self.pod_name(item)
+
+            ret = f"{ret}-rwxr--r-- 1 root root 0 {dt.strftime('%m-%d-%Y %H:%M:%S')} namespaces/{m['namespace']}/{item['kind']}/{m['name']}.yaml\n"
         print(ret.rstrip())
         exit(0)
+
+    def pod_name(self, item):
+        m = item["metadata"]
+        cont = {"count": 0, "running": 0, "restart": 0}
+        for c in item["status"]["containerStatuses"]:
+            cont["count"] = cont["count"] + 1
+            if "running" in c["state"]:
+                cont["running"] = cont["running"] + 1
+            cont["restart"] = cont["restart"] + c["restartCount"]
+
+        age = pretty_date(parser.parse(item["status"]["startTime"]))
+        return f"{m['name']} {cont['count']}-{cont['running']} {item['status']['phase']} {cont['restart']} {age}"
 
     def copyin(self, dst, src):
         logging.debug(f"copyin called  {dst} {src}")
@@ -79,9 +92,9 @@ class K8s:
     def copyout(self, dst, src):
         logging.debug(f"copyout called  {dst} {src}")
         dst = dst.split("/")
-        namespace = dst[0]
-        kind = dst[1]
-        name = dst[2].split(".yaml")[0]
+        namespace = dst[1]
+        kind = dst[2]
+        name = dst[3].split()[0].split(".yaml")[0]
         out = subprocess.check_output(
             [
                 "kubectl",
@@ -100,9 +113,9 @@ class K8s:
     def run(self, dst):
         logging.debug(f"run called  {dst} ")
         dst = dst.split("/")
-        namespace = dst[0]
-        kind = dst[1]
-        name = dst[2].split(".yaml")[0]
+        namespace = dst[1]
+        kind = dst[2]
+        name = dst[3].split()[0].split(".yaml")[0]
         out = subprocess.check_output(
             [
                 "kubectl",
@@ -117,14 +130,7 @@ class K8s:
         #    fd.write(out)
         print(out.decode("utf-8"))
         out = subprocess.check_output(
-            [
-                "kubectl",
-                f"--context={self.arch}",
-                f"--namespace={namespace}",
-                "get",
-                kind,
-                name,
-            ]
+            ["kubectl", f"--context={self.arch}", f"--namespace={namespace}", "get", kind, name]
         )
         print(out.decode("utf-8"))
 
@@ -194,13 +200,51 @@ def main2():
     parser_run.add_argument("dst")
     parser_run.set_defaults(func=CALL_MAP["run"])
 
-    parser.add_argument(
-        "--version", action="version", version="%(prog)s " + str(__version__)
-    )
+    parser.add_argument("--version", action="version", version="%(prog)s " + str(__version__))
 
     args = parser.parse_args()
 
     return args.func(args)
+
+
+def pretty_date(time=False):
+    """
+    Get a datetime object or a int() Epoch timestamp and return a
+    pretty string like 'an hour ago', 'Yesterday', '3 months ago',
+    'just now', etc
+    """
+    from datetime import datetime
+    import pytz
+
+    now = datetime.now(pytz.utc)
+    if type(time) is int:
+        diff = now - datetime.fromtimestamp(time)
+    elif isinstance(time, datetime):
+        diff = now - time
+    elif not time:
+        diff = now - now
+    second_diff = diff.seconds
+    day_diff = diff.days
+
+    if day_diff < 0:
+        return ""
+
+    if day_diff == 0:
+        if second_diff < 60:
+            return str(second_diff) + "s"
+        if second_diff < 3600:
+            return str(int(second_diff / 60)) + "m"
+        if second_diff < 86400:
+            return str(int(second_diff / 3600)) + " h"
+    if day_diff == 1:
+        return "1d"
+    if day_diff < 7:
+        return str(day_diff) + "d"
+    if day_diff < 31:
+        return str(int(day_diff / 7)) + "w"
+    if day_diff < 365:
+        return str(int(day_diff / 30)) + "m"
+    return str(int(day_diff / 365)) + "y"
 
 
 # AAAAAAA NNN OOOOOOOO GGGGGGGG SSSSSSSS DATETIME [PATH/]FILENAME [-> [PATH/]FILENAME[/]]]
@@ -210,34 +254,7 @@ class K8sHelper:
     def __init__(self, context):
         self.context = context
 
-    def get_all_pods(self):
-        config.load_kube_config(context=self.context)
-        api = client.CoreV1Api()
-        try:
-            api_response = api.list_pod_for_all_namespaces()
-            return api_response
-            # pprint(api_response)
-        except ApiException as e:
-            logging.exception(
-                "Exception when calling AppsV1Api->list_pod_for_all_namespaces: %s\n"
-                % e
-            )
-            exit(1)
-
-    def get_all_deployments(self):
-        config.load_kube_config(context=self.context)
-        api = client.AppsV1Api()
-        try:
-            api_response = api.list_deployment_for_all_namespaces()
-            return api_response
-            # pprint(api_response)
-        except ApiException as e:
-            logging.exception(
-                "Exception when calling AppsV1Api->list_pod_for_all_namespaces: %s\n"
-                % e
-            )
-            exit(1)
-
 
 if __name__ == "__main__":
     sys.exit(main2())
+
