@@ -1,7 +1,7 @@
 
 # Kubernetes Virtual filesystem for Midnight Commander
 
-This extension to MC shows the API object as files. 
+This is an extension to MC that shows the API object as files. 
 The main objective is to cut down on the time spent typing kubectl commands.
 
  1. Kubectl contexts
